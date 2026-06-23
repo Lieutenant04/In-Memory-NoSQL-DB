@@ -1,33 +1,78 @@
 #include <iostream>
+#include <string>
+#include <sstream>
+#include <vector>
+
+// Include our core database structure
 #include "Database.hpp"
 
 int main() {
-    // Instantiate our database
     Database db;
+    std::string line;
 
-    std::cout << "--- Testing In-Memory DB ---\n";
+    std::cout << "--- In-Memory NoSQL Database Started ---\n";
+    std::cout << "Available Commands:\n";
+    std::cout << "  SET_INT <key> <value>\n";
+    std::cout << "  SET_STR <key> <value>\n";
+    std::cout << "  GET <key>\n";
+    std::cout << "  DEL <key>\n";
+    std::cout << "  EXIT\n";
+    std::cout << "----------------------------------------\n\n";
 
-    // 1. Add some data (Simulating SET commands)
-    db.setInt("player_health", 100);
-    db.setString("player_name", "Andrei");
-    db.setString("server_status", "Active");
+    // Infinite loop to keep the server running
+    while (true) {
+        std::cout << "> ";
+        
+        // Read the entire line typed by the user
+        if (!std::getline(std::cin, line)) {
+            break; 
+        }
 
-    std::cout << "\n--- Fetching Data ---\n";
+        // Use stringstream to split the sentence into individual words
+        std::stringstream ss(line);
+        std::string word;
+        std::vector<std::string> args;
 
-    // 2. Retrieve the data (Simulating GET commands)
-    db.get("player_name");
-    db.get("player_health");
+        while (ss >> word) {
+            args.push_back(word);
+        }
 
-    // Try to get a key that doesn't exist
-    db.get("player_score");
+        // If the user just pressed Enter without typing anything, ask again
+        if (args.empty()) {
+            continue;
+        }
 
-    std::cout << "\n--- Deleting Data ---\n";
+        // The first word is always the command
+        std::string cmd = args[0];
 
-    // 3. Delete data (Simulating DEL commands)
-    db.remove("player_health");
-    
-    // Verify it was deleted
-    db.get("player_health");
+        // Route the command to the correct Database method
+        if (cmd == "EXIT") {
+            std::cout << "Shutting down database...\n";
+            break; // Exit the while loop and end the program
+        } 
+        else if (cmd == "SET_INT" && args.size() >= 3) {
+            try {
+                // Convert the 3rd word (string) into an integer
+                int val = std::stoi(args[2]);
+                db.setInt(args[1], val);
+            } catch (...) {
+                // Catch error if the user typed a word instead of a number
+                std::cout << "Error: Value must be a valid integer.\n";
+            }
+        } 
+        else if (cmd == "SET_STR" && args.size() >= 3) {
+            db.setString(args[1], args[2]);
+        } 
+        else if (cmd == "GET" && args.size() >= 2) {
+            db.get(args[1]);
+        } 
+        else if (cmd == "DEL" && args.size() >= 2) {
+            db.remove(args[1]);
+        } 
+        else {
+            std::cout << "Error: Invalid command or missing arguments.\n";
+        }
+    }
 
     return 0;
 }
