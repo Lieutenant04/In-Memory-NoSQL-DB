@@ -1,26 +1,33 @@
 #include <iostream>
-#include <vector>
-#include <memory> // Required for std::unique_ptr and std::make_unique
-
-// Include our custom classes
-#include "IntValue.hpp"
-#include "StringValue.hpp"
+#include "Database.hpp"
 
 int main() {
-    // Create a vector that can hold pointers to ANY derived class of IValue
-    std::vector<std::unique_ptr<IValue>> simpleDatabase;
+    // Instantiate our database
+    Database db;
 
-    // Add an integer and a string into the exact same vector using polymorphism
-    simpleDatabase.push_back(std::make_unique<IntValue>(100));
-    simpleDatabase.push_back(std::make_unique<StringValue>("Hello ACS UPB"));
+    std::cout << "--- Testing In-Memory DB ---\n";
 
-    // Iterate through the vector. 
-    // C++ knows exactly which print() method to call at runtime (Dynamic Binding)
-    for (const auto& element : simpleDatabase) {
-        std::cout << "[" << element->getType() << "]: ";
-        element->print();
-    }
+    // 1. Add some data (Simulating SET commands)
+    db.setInt("player_health", 100);
+    db.setString("player_name", "Andrei");
+    db.setString("server_status", "Active");
 
-    // Memory is AUTOMATICALLY freed here because of std::unique_ptr
-    return 0; 
+    std::cout << "\n--- Fetching Data ---\n";
+
+    // 2. Retrieve the data (Simulating GET commands)
+    db.get("player_name");
+    db.get("player_health");
+
+    // Try to get a key that doesn't exist
+    db.get("player_score");
+
+    std::cout << "\n--- Deleting Data ---\n";
+
+    // 3. Delete data (Simulating DEL commands)
+    db.remove("player_health");
+    
+    // Verify it was deleted
+    db.get("player_health");
+
+    return 0;
 }
