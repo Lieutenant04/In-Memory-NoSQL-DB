@@ -24,6 +24,11 @@ public:
 
     // Helper function to get the raw value if needed later
     int getValue() const { return data; }
+
+    // Convert the integer to string for serialization
+    std::string getAsString() const override {
+        return std::to_string(data);
+    }
 };
 
 #endif

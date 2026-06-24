@@ -22,6 +22,11 @@ public:
     }
 
     std::string getValue() const { return data; }
+
+    // Return the string directly for serialization
+    std::string getAsString() const override {
+        return data;
+    }
 };
 
 #endif

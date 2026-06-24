@@ -5,6 +5,7 @@
 #include <string>
 #include <memory>
 #include <iostream>
+#include <fstream>
 
 // Include the base interface and concrete classes
 #include "IValue.hpp"
@@ -54,6 +55,60 @@ public:
         } else {
             std::cout << "(nil) - Key not found\n";
         }
+    }
+
+    // --- PERSISTENCE METHODS ---
+
+    // Save the entire database to a text file
+    void saveToFile(const std::string& filename) const {
+        std::ofstream file(filename); // Open file for writing
+        
+        if (!file.is_open()) {
+            std::cout << "Error: Could not open file for saving.\n";
+            return;
+        }
+
+        // Iterate through the map and write each record to the file
+        for (const auto& pair : store) {
+            // Format: KEY TYPE VALUE (e.g., "player_score INT 150")
+            file << pair.first << " " 
+                 << pair.second->getType() << " " 
+                 << pair.second->getAsString() << "\n";
+        }
+
+        file.close();
+        std::cout << "SUCCESS: Database saved to disk (" << filename << ").\n";
+    }
+
+    // Load the database from a text file on startup
+    void loadFromFile(const std::string& filename) {
+        std::ifstream file(filename); // Open file for reading
+        
+        // If the file doesn't exist (e.g., first run), just return quietly
+        if (!file.is_open()) {
+            std::cout << "Notice: No existing database found. Starting fresh.\n";
+            return;
+        }
+
+        std::string key, type, value;
+        
+        // Read the file word by word
+        // We read key, then type. Then we read the rest of the line as the value.
+        while (file >> key >> type) {
+            // std::ws skips any leading spaces before reading the value
+            std::getline(file >> std::ws, value); 
+
+            if (type == "INT") {
+                // We use insert directly to bypass the "OK" print message of setInt
+                store[key] = std::make_unique<IntValue>(std::stoi(value));
+            } 
+            else if (type == "STRING") {
+                store[key] = std::make_unique<StringValue>(value);
+            }
+        }
+
+        file.close();
+        std::cout << "SUCCESS: Database loaded from disk (" << filename << ").\n";
     }
 };
 

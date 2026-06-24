@@ -14,6 +14,9 @@ public:
 
     // Pure virtual method to get the data type (e.g., "INT", "STRING")
     virtual std::string getType() const = 0;
+
+    // Pure virtual method to get the string representation for file saving
+    virtual std::string getAsString() const = 0;
 };
 
 #endif

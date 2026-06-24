@@ -19,6 +19,9 @@ int main() {
     std::cout << "  EXIT\n";
     std::cout << "----------------------------------------\n\n";
 
+    // Load existing data from disk before accepting new commands
+    db.loadFromFile("dump.db");
+
     // Infinite loop to keep the server running
     while (true) {
         std::cout << "> ";
@@ -47,9 +50,11 @@ int main() {
 
         // Route the command to the correct Database method
         if (cmd == "EXIT") {
-            std::cout << "Shutting down database...\n";
-            break; // Exit the while loop and end the program
-        } 
+            std::cout << "Saving and shutting down database...\n";
+            // Save all data to disk right before exiting
+            db.saveToFile("dump.db");
+            break; // Exit the while loop
+        }
         else if (cmd == "SET_INT" && args.size() >= 3) {
             try {
                 // Convert the 3rd word (string) into an integer
