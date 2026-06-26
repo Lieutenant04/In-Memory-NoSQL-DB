@@ -6,6 +6,9 @@
 #include <memory>
 #include <iostream>
 #include <fstream>
+#include <mutex>
+#include <thread>
+#include <chrono>
 
 // Include the base interface and concrete classes
 #include "IValue.hpp"
@@ -18,10 +21,12 @@ private:
     // Key: std::string (e.g., "score")
     // Value: std::unique_ptr<IValue> (Polymorphic pointer)
     std::unordered_map<std::string, std::unique_ptr<IValue>> store;
+    mutable std::mutex dbMutex;
 
 public:
     // Insert or update an integer value
     void setInt(const std::string& key, int value) {
+        std::lock_guard<std::mutex> lock(dbMutex);
         // std::make_unique handles memory allocation safely
         store[key] = std::make_unique<IntValue>(value);
         std::cout << "OK\n";
@@ -29,12 +34,14 @@ public:
 
     // Insert or update a string value
     void setString(const std::string& key, const std::string& value) {
+        std::lock_guard<std::mutex> lock(dbMutex);
         store[key] = std::make_unique<StringValue>(value);
         std::cout << "OK\n";
     }
 
     // Retrieve and print a value by its key
     void get(const std::string& key) const {
+        std::lock_guard<std::mutex> lock(dbMutex);
         // Use find() to search for the key without accidentally creating it
         auto it = store.find(key);
         
@@ -49,6 +56,7 @@ public:
 
     // Delete a key-value pair from the database
     void remove(const std::string& key) {
+        std::lock_guard<std::mutex> lock(dbMutex);
         // erase() returns 1 if the element was removed, 0 if not found
         if (store.erase(key)) {
             std::cout << "Deleted\n";
@@ -61,6 +69,7 @@ public:
 
     // Save the entire database to a text file
     void saveToFile(const std::string& filename) const {
+        std::lock_guard<std::mutex> lock(dbMutex);
         std::ofstream file(filename); // Open file for writing
         
         if (!file.is_open()) {
@@ -82,6 +91,7 @@ public:
 
     // Load the database from a text file on startup
     void loadFromFile(const std::string& filename) {
+        std::lock_guard<std::mutex> lock(dbMutex);
         std::ifstream file(filename); // Open file for reading
         
         // If the file doesn't exist (e.g., first run), just return quietly
@@ -109,6 +119,24 @@ public:
 
         file.close();
         std::cout << "SUCCESS: Database loaded from disk (" << filename << ").\n";
+    }
+
+    // Empties the dump.db file and clears the memory store
+    void emptyDatabaseFile() {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        store.clear();
+        std::ofstream file("dump.db", std::ios::trunc);
+        file.close();
+        std::cout << "\nSUCCESS: Database memory and dump.db have been emptied by the timer.\n> " << std::flush;
+    }
+
+    // Starts a background timer that empties the database file after a set time
+    void setClearTimer(int seconds) {
+        std::cout << "Timer set for " << seconds << " seconds. The database and dump.db will be emptied then.\n";
+        std::thread([this, seconds]() {
+            std::this_thread::sleep_for(std::chrono::seconds(seconds));
+            this->emptyDatabaseFile();
+        }).detach();
     }
 };
 

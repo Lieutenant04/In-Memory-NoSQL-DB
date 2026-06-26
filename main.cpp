@@ -16,6 +16,7 @@ int main() {
     std::cout << "  SET_STR <key> <value>\n";
     std::cout << "  GET <key>\n";
     std::cout << "  DEL <key>\n";
+    std::cout << "  CLEAR_TIMER <seconds>\n";
     std::cout << "  EXIT\n";
     std::cout << "----------------------------------------\n\n";
 
@@ -74,6 +75,14 @@ int main() {
         else if (cmd == "DEL" && args.size() >= 2) {
             db.remove(args[1]);
         } 
+        else if (cmd == "CLEAR_TIMER" && args.size() >= 2) {
+            try {
+                int seconds = std::stoi(args[1]);
+                db.setClearTimer(seconds);
+            } catch (...) {
+                std::cout << "Error: Seconds must be a valid integer.\n";
+            }
+        }
         else {
             std::cout << "Error: Invalid command or missing arguments.\n";
         }
