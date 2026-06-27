@@ -2,7 +2,6 @@
 #define STRINGVALUE_HPP
 
 #include "IValue.hpp"
-#include <iostream>
 #include <string>
 
 class StringValue : public IValue {
@@ -13,8 +12,8 @@ public:
     // Constructor initializing the string data
     StringValue(const std::string& val) : data(val) {}
 
-    void print() const override {
-        std::cout << "\"" << data << "\"" << std::endl;
+    std::string toDisplayString() const override {
+        return "\"" + data + "\"";
     }
 
     std::string getType() const override {

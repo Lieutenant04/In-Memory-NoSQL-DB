@@ -9,11 +9,22 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <atomic>
+#include <functional>
+#include <utility>
+#include <vector>
 
 // Include the base interface and concrete classes
 #include "IValue.hpp"
 #include "IntValue.hpp"
 #include "StringValue.hpp"
+
+// Result of loading from file, separates data from I/O concerns
+struct LoadResult {
+    bool fileFound = false;
+    int entriesLoaded = 0;
+    std::vector<std::string> warnings;
+};
 
 class Database {
 private:
@@ -22,121 +33,171 @@ private:
     // Value: std::unique_ptr<IValue> (Polymorphic pointer)
     std::unordered_map<std::string, std::unique_ptr<IValue>> store;
     mutable std::mutex dbMutex;
+    std::thread timerThread;
+    std::atomic<bool> stopTimer{false};
 
 public:
+    // Destructor ensures the timer thread is joined before the object is destroyed
+    ~Database() {
+        stopTimer = true;
+        if (timerThread.joinable()) {
+            timerThread.join();
+        }
+    }
+
     // Insert or update an integer value
     void setInt(const std::string& key, int value) {
         std::lock_guard<std::mutex> lock(dbMutex);
-        // std::make_unique handles memory allocation safely
         store[key] = std::make_unique<IntValue>(value);
-        std::cout << "OK\n";
     }
 
     // Insert or update a string value
     void setString(const std::string& key, const std::string& value) {
         std::lock_guard<std::mutex> lock(dbMutex);
         store[key] = std::make_unique<StringValue>(value);
-        std::cout << "OK\n";
     }
 
-    // Retrieve and print a value by its key
-    void get(const std::string& key) const {
+    // Retrieve a value by its key
+    // Returns {found, displayString} — caller handles output
+    std::pair<bool, std::string> get(const std::string& key) const {
         std::lock_guard<std::mutex> lock(dbMutex);
-        // Use find() to search for the key without accidentally creating it
         auto it = store.find(key);
-        
-        // If the iterator doesn't point to the end, the key was found
         if (it != store.end()) {
-            // it->second accesses the value (the pointer to IValue)
-            it->second->print();
-        } else {
-            std::cout << "(nil) - Key not found\n";
+            return {true, it->second->toDisplayString()};
         }
+        return {false, ""};
     }
 
-    // Delete a key-value pair from the database
-    void remove(const std::string& key) {
+    // Delete a key-value pair, returns true if the key was found and removed
+    bool remove(const std::string& key) {
         std::lock_guard<std::mutex> lock(dbMutex);
-        // erase() returns 1 if the element was removed, 0 if not found
-        if (store.erase(key)) {
-            std::cout << "Deleted\n";
-        } else {
-            std::cout << "(nil) - Key not found\n";
+        return store.erase(key) > 0;
+    }
+
+    // List all keys in the store
+    std::vector<std::string> keys() const {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        std::vector<std::string> result;
+        result.reserve(store.size());
+        for (const auto& pair : store) {
+            result.push_back(pair.first);
         }
+        return result;
+    }
+
+    // Check if a key exists
+    bool exists(const std::string& key) const {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        return store.count(key) > 0;
+    }
+
+    // Return the number of entries
+    size_t count() const {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        return store.size();
     }
 
     // --- PERSISTENCE METHODS ---
 
-    // Save the entire database to a text file
-    void saveToFile(const std::string& filename) const {
+    // Save the entire database to a text file, returns true on success
+    bool saveToFile(const std::string& filename) const {
         std::lock_guard<std::mutex> lock(dbMutex);
-        std::ofstream file(filename); // Open file for writing
+        std::ofstream file(filename);
         
         if (!file.is_open()) {
-            std::cout << "Error: Could not open file for saving.\n";
-            return;
+            return false;
         }
 
-        // Iterate through the map and write each record to the file
         for (const auto& pair : store) {
-            // Format: KEY TYPE VALUE (e.g., "player_score INT 150")
-            file << pair.first << " " 
-                 << pair.second->getType() << " " 
+            // Tab-separated format: KEY\tTYPE\tVALUE
+            file << pair.first << "\t" 
+                 << pair.second->getType() << "\t" 
                  << pair.second->getAsString() << "\n";
         }
 
         file.close();
-        std::cout << "SUCCESS: Database saved to disk (" << filename << ").\n";
+        return true;
     }
 
     // Load the database from a text file on startup
-    void loadFromFile(const std::string& filename) {
+    LoadResult loadFromFile(const std::string& filename) {
         std::lock_guard<std::mutex> lock(dbMutex);
-        std::ifstream file(filename); // Open file for reading
+        LoadResult result;
+        std::ifstream file(filename);
         
-        // If the file doesn't exist (e.g., first run), just return quietly
         if (!file.is_open()) {
-            std::cout << "Notice: No existing database found. Starting fresh.\n";
-            return;
+            return result;
         }
 
-        std::string key, type, value;
+        result.fileFound = true;
+        std::string line, key, type, value;
         
-        // Read the file word by word
-        // We read key, then type. Then we read the rest of the line as the value.
-        while (file >> key >> type) {
-            // std::ws skips any leading spaces before reading the value
-            std::getline(file >> std::ws, value); 
+        // Read tab-separated records: KEY\tTYPE\tVALUE
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+
+            auto tab1 = line.find('\t');
+            auto tab2 = (tab1 != std::string::npos) ? line.find('\t', tab1 + 1) : std::string::npos;
+            
+            if (tab1 == std::string::npos || tab2 == std::string::npos) {
+                result.warnings.push_back("Skipping malformed line in " + filename);
+                continue;
+            }
+            
+            key   = line.substr(0, tab1);
+            type  = line.substr(tab1 + 1, tab2 - tab1 - 1);
+            value = line.substr(tab2 + 1);
 
             if (type == "INT") {
-                // We use insert directly to bypass the "OK" print message of setInt
-                store[key] = std::make_unique<IntValue>(std::stoi(value));
+                try {
+                    store[key] = std::make_unique<IntValue>(std::stoi(value));
+                    result.entriesLoaded++;
+                } catch (const std::exception& e) {
+                    result.warnings.push_back("Skipping corrupt INT entry for key '" + key + "': " + e.what());
+                }
             } 
             else if (type == "STRING") {
                 store[key] = std::make_unique<StringValue>(value);
+                result.entriesLoaded++;
+            }
+            else {
+                result.warnings.push_back("Unknown type '" + type + "' for key '" + key + "'");
             }
         }
 
         file.close();
-        std::cout << "SUCCESS: Database loaded from disk (" << filename << ").\n";
+        return result;
     }
 
-    // Empties the dump.db file and clears the memory store
-    void emptyDatabaseFile() {
+    // Empties the database file and clears the memory store
+    void emptyDatabaseFile(const std::string& filename) {
         std::lock_guard<std::mutex> lock(dbMutex);
         store.clear();
-        std::ofstream file("dump.db", std::ios::trunc);
+        std::ofstream file(filename, std::ios::trunc);
         file.close();
-        std::cout << "\nSUCCESS: Database memory and dump.db have been emptied by the timer.\n> " << std::flush;
     }
 
     // Starts a background timer that empties the database file after a set time
-    void setClearTimer(int seconds) {
-        std::cout << "Timer set for " << seconds << " seconds. The database and dump.db will be emptied then.\n";
-        std::thread([this, seconds]() {
-            std::this_thread::sleep_for(std::chrono::seconds(seconds));
-            this->emptyDatabaseFile();
-        }).detach();
+    // Accepts an optional callback to notify the caller when the timer fires
+    void setClearTimer(int seconds, const std::string& filename,
+                       std::function<void()> onComplete = nullptr) {
+        // Cancel any existing timer first
+        stopTimer = true;
+        if (timerThread.joinable()) {
+            timerThread.join();
+        }
+        stopTimer = false;
+
+        timerThread = std::thread([this, seconds, filename, onComplete]() {
+            for (int i = 0; i < seconds * 10; ++i) {
+                if (stopTimer.load()) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (!stopTimer.load()) {
+                this->emptyDatabaseFile(filename);
+                if (onComplete) onComplete();
+            }
+        });
     }
 };
 

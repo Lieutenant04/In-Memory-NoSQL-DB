@@ -2,7 +2,6 @@
 #define INTVALUE_HPP
 
 #include "IValue.hpp"
-#include <iostream>
 
 class IntValue : public IValue {
 private:
@@ -12,9 +11,9 @@ public:
     // Constructor initializing the data
     IntValue(int val) : data(val) {}
 
-    // Override the print method from the base class
-    void print() const override {
-        std::cout << data << std::endl;
+    // Override to return formatted display string
+    std::string toDisplayString() const override {
+        return std::to_string(data);
     }
 
     // Override the getType method

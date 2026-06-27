@@ -9,3 +9,9 @@
 
 # Ignore VS Code settings
 .vscode/
+
+# Ignore generated database dump
+dump.db
+
+# Ignore CMake build directory
+build/
