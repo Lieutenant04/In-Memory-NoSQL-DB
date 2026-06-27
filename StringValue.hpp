@@ -16,8 +16,8 @@ public:
         return "\"" + data + "\"";
     }
 
-    std::string getType() const override {
-        return "STRING";
+    ValueType getType() const override {
+        return ValueType::STRING;
     }
 
     std::string getValue() const { return data; }

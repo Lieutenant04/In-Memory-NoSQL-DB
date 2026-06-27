@@ -1,15 +1,17 @@
 # In-Memory NoSQL Database
 
-A thread-safe, in-memory key-value database written in C++14. Supports integer and string value types, file-based persistence with corruption-resilient loading, background timers, and a clean separation between data logic and I/O.
+A thread-safe, in-memory key-value database written in C++17. Supports integer and string value types, file-based persistence with corruption-resilient loading, background timers, and a clean separation between data logic and I/O.
 
 ## Features
 
 - **In-Memory Store**: Fast key-value storage using `std::unordered_map`
+- **Bulk Operations**: Delete multiple keys in a single command with per-key feedback
 - **Thread Safety**: All operations protected with `std::mutex` for safe concurrent access
 - **Polymorphism**: Interface-based design (`IValue` → `IntValue`, `StringValue`) for extensible value types
-- **Robust Persistence**: Tab-separated file format with graceful handling of corrupt or malformed entries
+- **Robust Persistence**: Tab-separated file format with escape encoding and graceful handling of corrupt or malformed entries
 - **Background Timer**: Schedule automatic database clearing with safe thread lifecycle management
 - **Clean Architecture**: Database methods return values instead of printing — all I/O is handled by the CLI layer
+- **Test Suite**: 29 automated tests covering CRUD, bulk delete, persistence round-trips, error handling, and timer behaviour
 
 ## Available Commands
 
@@ -18,7 +20,9 @@ A thread-safe, in-memory key-value database written in C++14. Supports integer a
 | `SET_INT <key> <value>` | Store an integer value for the given key |
 | `SET_STR <key> <value>` | Store a string value (supports spaces in values) |
 | `GET <key>` | Retrieve the value associated with the key |
-| `DEL <key>` | Delete a key-value pair |
+| `DEL <key1> [key2] ...` | Delete one or more key-value pairs |
+| `RENAME <old_key> <new_key>` | Atomically rename a key (overwrites target if it exists) |
+| `TYPE <key>` | Return the type of the value stored under a key (INT or STRING) |
 | `KEYS` | List all keys in the database |
 | `EXISTS <key>` | Check if a key exists (returns 1 or 0) |
 | `COUNT` | Return the total number of stored entries |
@@ -33,7 +37,9 @@ Available Commands:
   SET_INT <key> <value>
   SET_STR <key> <value>
   GET <key>
-  DEL <key>
+  DEL <key1> [key2] [key3] ...
+  RENAME <old_key> <new_key>
+  TYPE <key>
   KEYS
   EXISTS <key>
   COUNT
@@ -57,10 +63,23 @@ player_name
 1 (exists)
 > COUNT
 2
-> DEL score
+> TYPE score
+INT
+> RENAME score points
+OK
+> GET points
+150
+> DEL points
 Deleted
+> SET_INT hp 100
+OK
+> SET_INT mp 50
+OK
+> DEL points hp ghost
+Deleted 2 key(s)
+Not found: ghost
 > COUNT
-1
+2
 > EXIT
 Saving and shutting down database...
 SUCCESS: Database saved to disk (dump.db).
@@ -78,7 +97,11 @@ cmake --build build
 ### Option 2: Manual Compilation
 
 ```bash
-g++ -std=c++14 main.cpp -pthread -o db_app
+# Main application
+g++ -std=c++17 main.cpp -pthread -o db_app
+
+# Test suite
+g++ -std=c++17 tests.cpp -pthread -o db_tests
 ```
 
 ### Running
@@ -86,6 +109,17 @@ g++ -std=c++14 main.cpp -pthread -o db_app
 ```bash
 ./db_app        # Linux/macOS
 db_app.exe      # Windows
+```
+
+### Running Tests
+
+```bash
+# Via CMake + CTest
+cd build && ctest --output-on-failure
+
+# Or directly
+./db_tests      # Linux/macOS
+db_tests.exe    # Windows
 ```
 
 ## Project Structure
@@ -97,6 +131,7 @@ db_app.exe      # Windows
 | `IValue.hpp` | Base polymorphic interface for stored values |
 | `IntValue.hpp` | Integer value implementation |
 | `StringValue.hpp` | String value implementation |
+| `tests.cpp` | Automated test suite (29 tests covering CRUD, bulk delete, persistence, timers) |
 | `CMakeLists.txt` | CMake build configuration |
 
 ## Architecture
@@ -128,4 +163,12 @@ key1	INT	42
 key2	STRING	Hello World
 ```
 
-This format safely handles values containing spaces. Malformed or corrupt entries are skipped with warnings on load.
+Special characters in keys and values are escaped to keep the format safe:
+
+| Character | Escaped as |
+| --- | --- |
+| `\` | `\\` |
+| Tab | `\t` |
+| Newline | `\n` |
+
+This format safely handles values containing spaces, tabs, and newlines. Malformed or corrupt entries are skipped with warnings on load.

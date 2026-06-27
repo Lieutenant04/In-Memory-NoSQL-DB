@@ -11,7 +11,7 @@
 #include <chrono>
 #include <atomic>
 #include <functional>
-#include <utility>
+#include <optional>
 #include <vector>
 
 // Include the base interface and concrete classes
@@ -36,6 +36,38 @@ private:
     std::thread timerThread;
     std::atomic<bool> stopTimer{false};
 
+    // Escape special characters so tab-separated format stays intact
+    // Encodes: \ → \\, tab → \t, newline → \n
+    static std::string escape(const std::string& s) {
+        std::string result;
+        result.reserve(s.size());
+        for (char c : s) {
+            if (c == '\\')     result += "\\\\";
+            else if (c == '\t') result += "\\t";
+            else if (c == '\n') result += "\\n";
+            else                result.push_back(c);
+        }
+        return result;
+    }
+
+    // Reverse the escape encoding when reading from the dump file
+    static std::string unescape(const std::string& s) {
+        std::string result;
+        result.reserve(s.size());
+        for (size_t i = 0; i < s.size(); ++i) {
+            if (s[i] == '\\' && i + 1 < s.size()) {
+                char next = s[i + 1];
+                if (next == '\\') { result.push_back('\\'); ++i; }
+                else if (next == 't') { result.push_back('\t'); ++i; }
+                else if (next == 'n') { result.push_back('\n'); ++i; }
+                else result.push_back(s[i]);
+            } else {
+                result.push_back(s[i]);
+            }
+        }
+        return result;
+    }
+
 public:
     // Destructor ensures the timer thread is joined before the object is destroyed
     ~Database() {
@@ -45,33 +77,92 @@ public:
         }
     }
 
-    // Insert or update an integer value
-    void setInt(const std::string& key, int value) {
+    // Database manages a mutex and a thread — copying or moving makes no sense
+    Database() = default;
+    Database(const Database&) = delete;
+    Database& operator=(const Database&) = delete;
+    Database(Database&&) = delete;
+    Database& operator=(Database&&) = delete;
+
+    // Insert or update an integer value, returns false if key is empty
+    bool setInt(const std::string& key, int value) {
+        if (key.empty()) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
         store[key] = std::make_unique<IntValue>(value);
+        return true;
     }
 
-    // Insert or update a string value
-    void setString(const std::string& key, const std::string& value) {
+    // Insert or update a string value, returns false if key is empty
+    bool setString(const std::string& key, const std::string& value) {
+        if (key.empty()) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
         store[key] = std::make_unique<StringValue>(value);
+        return true;
     }
 
     // Retrieve a value by its key
-    // Returns {found, displayString} — caller handles output
-    std::pair<bool, std::string> get(const std::string& key) const {
+    // Returns the display string if found, or std::nullopt if the key doesn't exist
+    std::optional<std::string> get(const std::string& key) const {
+        if (key.empty()) return std::nullopt;
         std::lock_guard<std::mutex> lock(dbMutex);
         auto it = store.find(key);
         if (it != store.end()) {
-            return {true, it->second->toDisplayString()};
+            return it->second->toDisplayString();
         }
-        return {false, ""};
+        return std::nullopt;
     }
 
     // Delete a key-value pair, returns true if the key was found and removed
     bool remove(const std::string& key) {
+        if (key.empty()) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
         return store.erase(key) > 0;
+    }
+
+    // Result of a bulk delete operation
+    struct RemoveResult {
+        int deleted = 0;
+        std::vector<std::string> notFound;
+    };
+
+    // Delete multiple keys in one operation, returns how many were deleted and which were missing
+    RemoveResult removeMultiple(const std::vector<std::string>& keys) {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        RemoveResult result;
+        for (const auto& key : keys) {
+            if (key.empty()) continue;
+            if (store.erase(key) > 0) {
+                result.deleted++;
+            } else {
+                result.notFound.push_back(key);
+            }
+        }
+        return result;
+    }
+
+    // Atomically rename a key. Overwrites newKey if it already exists (Redis behaviour).
+    // Returns false if oldKey doesn't exist or either key is empty.
+    bool rename(const std::string& oldKey, const std::string& newKey) {
+        if (oldKey.empty() || newKey.empty() || oldKey == newKey) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(oldKey);
+        if (it == store.end()) return false;
+        store.erase(newKey);  // remove target if it exists
+        auto node = store.extract(it);
+        node.key() = newKey;
+        store.insert(std::move(node));
+        return true;
+    }
+
+    // Return the type of the value stored under key, or nullopt if key doesn't exist
+    std::optional<ValueType> type(const std::string& key) const {
+        if (key.empty()) return std::nullopt;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(key);
+        if (it != store.end()) {
+            return it->second->getType();
+        }
+        return std::nullopt;
     }
 
     // List all keys in the store
@@ -87,6 +178,7 @@ public:
 
     // Check if a key exists
     bool exists(const std::string& key) const {
+        if (key.empty()) return false;
         std::lock_guard<std::mutex> lock(dbMutex);
         return store.count(key) > 0;
     }
@@ -99,7 +191,8 @@ public:
 
     // --- PERSISTENCE METHODS ---
 
-    // Save the entire database to a text file, returns true on success
+    // Save the entire database to a text file
+    // Returns true only if every write succeeded (catches disk-full, I/O errors)
     bool saveToFile(const std::string& filename) const {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::ofstream file(filename);
@@ -109,14 +202,14 @@ public:
         }
 
         for (const auto& pair : store) {
-            // Tab-separated format: KEY\tTYPE\tVALUE
-            file << pair.first << "\t" 
-                 << pair.second->getType() << "\t" 
-                 << pair.second->getAsString() << "\n";
+            // Tab-separated format: KEY\tTYPE\tVALUE (with escaped special chars)
+            file << escape(pair.first) << "\t" 
+                 << valueTypeToString(pair.second->getType()) << "\t" 
+                 << escape(pair.second->getAsString()) << "\n";
         }
 
         file.close();
-        return true;
+        return !file.fail();  // catches write errors (disk full, I/O failure, etc.)
     }
 
     // Load the database from a text file on startup
@@ -144,9 +237,9 @@ public:
                 continue;
             }
             
-            key   = line.substr(0, tab1);
+            key   = unescape(line.substr(0, tab1));
             type  = line.substr(tab1 + 1, tab2 - tab1 - 1);
-            value = line.substr(tab2 + 1);
+            value = unescape(line.substr(tab2 + 1));
 
             if (type == "INT") {
                 try {

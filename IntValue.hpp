@@ -17,8 +17,8 @@ public:
     }
 
     // Override the getType method
-    std::string getType() const override {
-        return "INT";
+    ValueType getType() const override {
+        return ValueType::INT;
     }
 
     // Helper function to get the raw value if needed later

@@ -2,6 +2,7 @@
 #include <string>
 #include <sstream>
 #include <vector>
+#include <atomic>
 
 // Include our core database structure
 #include "Database.hpp"
@@ -15,7 +16,9 @@ int main() {
     std::cout << "  SET_INT <key> <value>\n";
     std::cout << "  SET_STR <key> <value>\n";
     std::cout << "  GET <key>\n";
-    std::cout << "  DEL <key>\n";
+    std::cout << "  DEL <key1> [key2] [key3] ...\n";
+    std::cout << "  RENAME <old_key> <new_key>\n";
+    std::cout << "  TYPE <key>\n";
     std::cout << "  KEYS\n";
     std::cout << "  EXISTS <key>\n";
     std::cout << "  COUNT\n";
@@ -35,8 +38,15 @@ int main() {
         std::cout << "Notice: No existing database found. Starting fresh.\n";
     }
 
+    // Flag set by the timer callback so the main loop can print the message safely
+    std::atomic<bool> timerFired{false};
+
     // Infinite loop to keep the server running
     while (true) {
+        // Check if the background timer fired and print the notification synchronously
+        if (timerFired.exchange(false)) {
+            std::cout << "\nSUCCESS: Database and dump.db have been emptied by the timer.\n";
+        }
         std::cout << "> ";
         
         // Read the entire line typed by the user
@@ -74,8 +84,11 @@ int main() {
         else if (cmd == "SET_INT" && args.size() >= 3) {
             try {
                 int val = std::stoi(args[2]);
-                db.setInt(args[1], val);
-                std::cout << "OK\n";
+                if (db.setInt(args[1], val)) {
+                    std::cout << "OK\n";
+                } else {
+                    std::cout << "Error: Key cannot be empty.\n";
+                }
             } catch (...) {
                 std::cout << "Error: Value must be a valid integer.\n";
             }
@@ -87,24 +100,55 @@ int main() {
                 if (i > 2) val += " ";
                 val += args[i];
             }
-            db.setString(args[1], val);
-            std::cout << "OK\n";
+            if (db.setString(args[1], val)) {
+                std::cout << "OK\n";
+            } else {
+                std::cout << "Error: Key cannot be empty.\n";
+            }
         } 
         else if (cmd == "GET" && args.size() >= 2) {
-            auto result = db.get(args[1]);
-            if (result.first) {
-                std::cout << result.second << "\n";
+            if (auto val = db.get(args[1])) {
+                std::cout << *val << "\n";
             } else {
                 std::cout << "(nil) - Key not found\n";
             }
         } 
         else if (cmd == "DEL" && args.size() >= 2) {
-            if (db.remove(args[1])) {
-                std::cout << "Deleted\n";
+            if (args.size() == 2) {
+                // Single key: use the original remove for a simple message
+                if (db.remove(args[1])) {
+                    std::cout << "Deleted\n";
+                } else {
+                    std::cout << "(nil) - Key not found\n";
+                }
+            } else {
+                // Multiple keys: collect them and bulk-delete
+                std::vector<std::string> keysToDelete(args.begin() + 1, args.end());
+                auto result = db.removeMultiple(keysToDelete);
+                std::cout << "Deleted " << result.deleted << " key(s)\n";
+                if (!result.notFound.empty()) {
+                    std::cout << "Not found:";
+                    for (const auto& k : result.notFound) {
+                        std::cout << " " << k;
+                    }
+                    std::cout << "\n";
+                }
+            }
+        }
+        else if (cmd == "RENAME" && args.size() >= 3) {
+            if (db.rename(args[1], args[2])) {
+                std::cout << "OK\n";
+            } else {
+                std::cout << "Error: Source key not found, keys are empty, or keys are identical.\n";
+            }
+        }
+        else if (cmd == "TYPE" && args.size() >= 2) {
+            if (auto vt = db.type(args[1])) {
+                std::cout << valueTypeToString(*vt) << "\n";
             } else {
                 std::cout << "(nil) - Key not found\n";
             }
-        } 
+        }
         else if (cmd == "KEYS") {
             auto allKeys = db.keys();
             if (allKeys.empty()) {
@@ -125,8 +169,8 @@ int main() {
             try {
                 int seconds = std::stoi(args[1]);
                 std::cout << "Timer set for " << seconds << " seconds. The database and dump.db will be emptied then.\n";
-                db.setClearTimer(seconds, "dump.db", []() {
-                    std::cout << "\nSUCCESS: Database and dump.db have been emptied by the timer.\n" << std::flush;
+                db.setClearTimer(seconds, "dump.db", [&timerFired]() {
+                    timerFired.store(true);
                 });
             } catch (...) {
                 std::cout << "Error: Seconds must be a valid integer.\n";
