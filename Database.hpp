@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <string>
 #include <memory>
-#include <iostream>
+
 #include <fstream>
 #include <mutex>
 #include <thread>
@@ -18,6 +18,11 @@
 #include "IValue.hpp"
 #include "IntValue.hpp"
 #include "StringValue.hpp"
+#include "DoubleValue.hpp"
+#include "BoolValue.hpp"
+#include "ListValue.hpp"
+
+namespace nosqldb {
 
 // Result of loading from file, separates data from I/O concerns
 struct LoadResult {
@@ -189,6 +194,100 @@ public:
         return store.size();
     }
 
+    // Store a double value, returns false if key is empty
+    bool setDouble(const std::string& key, double value) {
+        if (key.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        store[key] = std::make_unique<DoubleValue>(value);
+        return true;
+    }
+
+    // Store a bool value, returns false if key is empty
+    bool setBool(const std::string& key, bool value) {
+        if (key.empty()) return false;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        store[key] = std::make_unique<BoolValue>(value);
+        return true;
+    }
+
+    // Push a value to the front of a list. Creates the list if key doesn't exist.
+    // Returns -1 if key exists but is not a list, otherwise returns new list length.
+    int listPushLeft(const std::string& key, const std::string& value) {
+        if (key.empty()) return -1;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(key);
+        if (it != store.end()) {
+            if (it->second->getType() != ValueType::LIST) return -1;
+            auto* list = static_cast<ListValue*>(it->second.get());
+            list->pushFront(value);
+            return list->length();
+        }
+        auto newList = std::make_unique<ListValue>();
+        newList->pushFront(value);
+        int len = newList->length();
+        store[key] = std::move(newList);
+        return len;
+    }
+
+    // Push a value to the back of a list. Creates the list if key doesn't exist.
+    // Returns -1 if key exists but is not a list, otherwise returns new list length.
+    int listPushRight(const std::string& key, const std::string& value) {
+        if (key.empty()) return -1;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(key);
+        if (it != store.end()) {
+            if (it->second->getType() != ValueType::LIST) return -1;
+            auto* list = static_cast<ListValue*>(it->second.get());
+            list->pushBack(value);
+            return list->length();
+        }
+        auto newList = std::make_unique<ListValue>();
+        newList->pushBack(value);
+        int len = newList->length();
+        store[key] = std::move(newList);
+        return len;
+    }
+
+    // Pop from the front of a list. Returns nullopt if key missing, not a list, or list empty.
+    std::optional<std::string> listPopLeft(const std::string& key) {
+        if (key.empty()) return std::nullopt;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(key);
+        if (it == store.end() || it->second->getType() != ValueType::LIST) return std::nullopt;
+        auto* list = static_cast<ListValue*>(it->second.get());
+        return list->popFront();
+    }
+
+    // Pop from the back of a list. Returns nullopt if key missing, not a list, or list empty.
+    std::optional<std::string> listPopRight(const std::string& key) {
+        if (key.empty()) return std::nullopt;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(key);
+        if (it == store.end() || it->second->getType() != ValueType::LIST) return std::nullopt;
+        auto* list = static_cast<ListValue*>(it->second.get());
+        return list->popBack();
+    }
+
+    // Return a range of elements from a list. Returns nullopt if key missing or not a list.
+    std::optional<std::vector<std::string>> listRange(const std::string& key, int start, int stop) const {
+        if (key.empty()) return std::nullopt;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(key);
+        if (it == store.end() || it->second->getType() != ValueType::LIST) return std::nullopt;
+        auto* list = static_cast<const ListValue*>(it->second.get());
+        return list->range(start, stop);
+    }
+
+    // Return the length of a list. Returns nullopt if key missing or not a list.
+    std::optional<int> listLength(const std::string& key) const {
+        if (key.empty()) return std::nullopt;
+        std::lock_guard<std::mutex> lock(dbMutex);
+        auto it = store.find(key);
+        if (it == store.end() || it->second->getType() != ValueType::LIST) return std::nullopt;
+        auto* list = static_cast<const ListValue*>(it->second.get());
+        return list->length();
+    }
+
     // --- PERSISTENCE METHODS ---
 
     // Save the entire database to a text file
@@ -222,6 +321,9 @@ public:
             return result;
         }
 
+        // Clear existing data so a load replaces the store rather than silently merging
+        store.clear();
+
         result.fileFound = true;
         std::string line, key, type, value;
         
@@ -253,6 +355,29 @@ public:
                 store[key] = std::make_unique<StringValue>(value);
                 result.entriesLoaded++;
             }
+            else if (type == "DOUBLE") {
+                try {
+                    store[key] = std::make_unique<DoubleValue>(std::stod(value));
+                    result.entriesLoaded++;
+                } catch (const std::exception& e) {
+                    result.warnings.push_back("Skipping corrupt DOUBLE entry for key '" + key + "': " + e.what());
+                }
+            }
+            else if (type == "BOOL") {
+                if (value == "1") {
+                    store[key] = std::make_unique<BoolValue>(true);
+                    result.entriesLoaded++;
+                } else if (value == "0") {
+                    store[key] = std::make_unique<BoolValue>(false);
+                    result.entriesLoaded++;
+                } else {
+                    result.warnings.push_back("Skipping corrupt BOOL entry for key '" + key + "': expected '0' or '1'");
+                }
+            }
+            else if (type == "LIST") {
+                store[key] = std::make_unique<ListValue>(ListValue::parseItems(value));
+                result.entriesLoaded++;
+            }
             else {
                 result.warnings.push_back("Unknown type '" + type + "' for key '" + key + "'");
             }
@@ -263,17 +388,25 @@ public:
     }
 
     // Empties the database file and clears the memory store
-    void emptyDatabaseFile(const std::string& filename) {
+    // Returns false if the file could not be opened for truncation
+    bool emptyDatabaseFile(const std::string& filename) {
         std::lock_guard<std::mutex> lock(dbMutex);
         store.clear();
         std::ofstream file(filename, std::ios::trunc);
+        if (!file.is_open()) {
+            return false;
+        }
         file.close();
+        return !file.fail();
     }
 
     // Starts a background timer that empties the database file after a set time
     // Accepts an optional callback to notify the caller when the timer fires
-    void setClearTimer(int seconds, const std::string& filename,
+    // Returns false if seconds is not a positive value
+    bool setClearTimer(int seconds, const std::string& filename,
                        std::function<void()> onComplete = nullptr) {
+        if (seconds <= 0) return false;
+
         // Cancel any existing timer first
         stopTimer = true;
         if (timerThread.joinable()) {
@@ -291,7 +424,10 @@ public:
                 if (onComplete) onComplete();
             }
         });
+        return true;
     }
 };
+
+} // namespace nosqldb
 
 #endif

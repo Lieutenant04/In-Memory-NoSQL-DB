@@ -7,6 +7,11 @@
 // Include our core database structure
 #include "Database.hpp"
 
+// Persistence filename — used for save, load, and clear-timer
+static const std::string DUMP_FILE = "dump.db";
+
+using namespace nosqldb;
+
 int main() {
     Database db;
     std::string line;
@@ -15,6 +20,8 @@ int main() {
     std::cout << "Available Commands:\n";
     std::cout << "  SET_INT <key> <value>\n";
     std::cout << "  SET_STR <key> <value>\n";
+    std::cout << "  SET_DOUBLE <key> <value>\n";
+    std::cout << "  SET_BOOL <key> <value>\n";
     std::cout << "  GET <key>\n";
     std::cout << "  DEL <key1> [key2] [key3] ...\n";
     std::cout << "  RENAME <old_key> <new_key>\n";
@@ -22,14 +29,20 @@ int main() {
     std::cout << "  KEYS\n";
     std::cout << "  EXISTS <key>\n";
     std::cout << "  COUNT\n";
+    std::cout << "  LPUSH <key> <value>\n";
+    std::cout << "  RPUSH <key> <value>\n";
+    std::cout << "  LPOP <key>\n";
+    std::cout << "  RPOP <key>\n";
+    std::cout << "  LRANGE <key> <start> <stop>\n";
+    std::cout << "  LLEN <key>\n";
     std::cout << "  CLEAR_TIMER <seconds>\n";
     std::cout << "  EXIT\n";
     std::cout << "----------------------------------------\n\n";
 
     // Load existing data from disk before accepting new commands
-    auto loadResult = db.loadFromFile("dump.db");
+    auto loadResult = db.loadFromFile(DUMP_FILE);
     if (loadResult.fileFound) {
-        std::cout << "SUCCESS: Database loaded from disk (dump.db). "
+        std::cout << "SUCCESS: Database loaded from disk (" << DUMP_FILE << "). "
                   << loadResult.entriesLoaded << " entries loaded.\n";
         for (const auto& warning : loadResult.warnings) {
             std::cerr << "Warning: " << warning << "\n";
@@ -45,7 +58,7 @@ int main() {
     while (true) {
         // Check if the background timer fired and print the notification synchronously
         if (timerFired.exchange(false)) {
-            std::cout << "\nSUCCESS: Database and dump.db have been emptied by the timer.\n";
+            std::cout << "\nSUCCESS: Database and " << DUMP_FILE << " have been emptied by the timer.\n";
         }
         std::cout << "> ";
         
@@ -74,10 +87,10 @@ int main() {
         // Route the command to the correct Database method
         if (cmd == "EXIT") {
             std::cout << "Saving and shutting down database...\n";
-            if (db.saveToFile("dump.db")) {
-                std::cout << "SUCCESS: Database saved to disk (dump.db).\n";
+            if (db.saveToFile(DUMP_FILE)) {
+                std::cout << "SUCCESS: Database saved to disk (" << DUMP_FILE << ").\n";
             } else {
-                std::cout << "Error: Could not save database to dump.db.\n";
+                std::cout << "Error: Could not save database to " << DUMP_FILE << ".\n";
             }
             break;
         }
@@ -168,12 +181,149 @@ int main() {
         else if (cmd == "CLEAR_TIMER" && args.size() >= 2) {
             try {
                 int seconds = std::stoi(args[1]);
-                std::cout << "Timer set for " << seconds << " seconds. The database and dump.db will be emptied then.\n";
-                db.setClearTimer(seconds, "dump.db", [&timerFired]() {
-                    timerFired.store(true);
-                });
+                if (db.setClearTimer(seconds, DUMP_FILE, [&timerFired]() {
+                        timerFired.store(true);
+                    })) {
+                    std::cout << "Timer set for " << seconds << " seconds. The database and " << DUMP_FILE << " will be emptied then.\n";
+                } else {
+                    std::cout << "Error: Seconds must be a positive integer.\n";
+                }
             } catch (...) {
                 std::cout << "Error: Seconds must be a valid integer.\n";
+            }
+        }
+        else if (cmd == "SET_DOUBLE" && args.size() >= 3) {
+            try {
+                double val = std::stod(args[2]);
+                if (db.setDouble(args[1], val)) {
+                    std::cout << "OK\n";
+                } else {
+                    std::cout << "Error: Key cannot be empty.\n";
+                }
+            } catch (...) {
+                std::cout << "Error: Value must be a valid double.\n";
+            }
+        }
+        else if (cmd == "SET_BOOL" && args.size() >= 3) {
+            std::string val = args[2];
+            if (val == "true" || val == "1") {
+                if (db.setBool(args[1], true)) {
+                    std::cout << "OK\n";
+                } else {
+                    std::cout << "Error: Key cannot be empty.\n";
+                }
+            } else if (val == "false" || val == "0") {
+                if (db.setBool(args[1], false)) {
+                    std::cout << "OK\n";
+                } else {
+                    std::cout << "Error: Key cannot be empty.\n";
+                }
+            } else {
+                std::cout << "Error: Value must be 'true', 'false', '1', or '0'.\n";
+            }
+        }
+        else if (cmd == "LPUSH" && args.size() >= 3) {
+            std::string val;
+            for (size_t i = 2; i < args.size(); ++i) {
+                if (i > 2) val += " ";
+                val += args[i];
+            }
+            int result = db.listPushLeft(args[1], val);
+            if (result == -1) {
+                if (db.exists(args[1])) {
+                    std::cout << "WRONGTYPE: Key holds a value that is not a list.\n";
+                } else {
+                    std::cout << "Error: Key cannot be empty.\n";
+                }
+            } else {
+                std::cout << "(integer) " << result << "\n";
+            }
+        }
+        else if (cmd == "RPUSH" && args.size() >= 3) {
+            std::string val;
+            for (size_t i = 2; i < args.size(); ++i) {
+                if (i > 2) val += " ";
+                val += args[i];
+            }
+            int result = db.listPushRight(args[1], val);
+            if (result == -1) {
+                if (db.exists(args[1])) {
+                    std::cout << "WRONGTYPE: Key holds a value that is not a list.\n";
+                } else {
+                    std::cout << "Error: Key cannot be empty.\n";
+                }
+            } else {
+                std::cout << "(integer) " << result << "\n";
+            }
+        }
+        else if (cmd == "LPOP" && args.size() >= 2) {
+            auto result = db.listPopLeft(args[1]);
+            if (result.has_value()) {
+                std::cout << *result << "\n";
+            } else {
+                if (db.exists(args[1])) {
+                    auto t = db.type(args[1]);
+                    if (t.has_value() && *t != ValueType::LIST) {
+                        std::cout << "WRONGTYPE: Key holds a value that is not a list.\n";
+                    } else {
+                        std::cout << "(nil)\n";
+                    }
+                } else {
+                    std::cout << "(nil)\n";
+                }
+            }
+        }
+        else if (cmd == "RPOP" && args.size() >= 2) {
+            auto result = db.listPopRight(args[1]);
+            if (result.has_value()) {
+                std::cout << *result << "\n";
+            } else {
+                if (db.exists(args[1])) {
+                    auto t = db.type(args[1]);
+                    if (t.has_value() && *t != ValueType::LIST) {
+                        std::cout << "WRONGTYPE: Key holds a value that is not a list.\n";
+                    } else {
+                        std::cout << "(nil)\n";
+                    }
+                } else {
+                    std::cout << "(nil)\n";
+                }
+            }
+        }
+        else if (cmd == "LRANGE" && args.size() >= 4) {
+            try {
+                int start = std::stoi(args[2]);
+                int stop = std::stoi(args[3]);
+                auto result = db.listRange(args[1], start, stop);
+                if (result.has_value()) {
+                    if (result->empty()) {
+                        std::cout << "(empty list)\n";
+                    } else {
+                        for (size_t i = 0; i < result->size(); ++i) {
+                            std::cout << (i + 1) << ") " << (*result)[i] << "\n";
+                        }
+                    }
+                } else {
+                    if (db.exists(args[1])) {
+                        std::cout << "WRONGTYPE: Key holds a value that is not a list.\n";
+                    } else {
+                        std::cout << "(nil) - Key not found\n";
+                    }
+                }
+            } catch (...) {
+                std::cout << "Error: Start and stop must be valid integers.\n";
+            }
+        }
+        else if (cmd == "LLEN" && args.size() >= 2) {
+            auto result = db.listLength(args[1]);
+            if (result.has_value()) {
+                std::cout << "(integer) " << *result << "\n";
+            } else {
+                if (db.exists(args[1])) {
+                    std::cout << "WRONGTYPE: Key holds a value that is not a list.\n";
+                } else {
+                    std::cout << "(nil) - Key not found\n";
+                }
             }
         }
         else {

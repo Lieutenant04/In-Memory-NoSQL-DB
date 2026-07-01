@@ -3,14 +3,19 @@
 
 #include <string>
 
+namespace nosqldb {
+
 // Type-safe enum for value types — prevents typos in string comparisons
-enum class ValueType { INT, STRING };
+enum class ValueType { INT, STRING, DOUBLE, BOOL, LIST };
 
 // Convert ValueType to its string representation for serialization
 inline std::string valueTypeToString(ValueType type) {
     switch (type) {
         case ValueType::INT:    return "INT";
         case ValueType::STRING: return "STRING";
+        case ValueType::DOUBLE: return "DOUBLE";
+        case ValueType::BOOL:   return "BOOL";
+        case ValueType::LIST:   return "LIST";
     }
     return "UNKNOWN";
 }
@@ -30,5 +35,7 @@ public:
     // Pure virtual method to get the string representation for file saving
     virtual std::string getAsString() const = 0;
 };
+
+} // namespace nosqldb
 
 #endif

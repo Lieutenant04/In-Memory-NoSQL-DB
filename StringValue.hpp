@@ -4,13 +4,15 @@
 #include "IValue.hpp"
 #include <string>
 
+namespace nosqldb {
+
 class StringValue : public IValue {
 private:
     std::string data;
 
 public:
     // Constructor initializing the string data
-    StringValue(const std::string& val) : data(val) {}
+    explicit StringValue(const std::string& val) : data(val) {}
 
     std::string toDisplayString() const override {
         return "\"" + data + "\"";
@@ -27,5 +29,7 @@ public:
         return data;
     }
 };
+
+} // namespace nosqldb
 
 #endif

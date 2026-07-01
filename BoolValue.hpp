@@ -1,34 +1,34 @@
-#ifndef INTVALUE_HPP
-#define INTVALUE_HPP
+#ifndef BOOLVALUE_HPP
+#define BOOLVALUE_HPP
 
 #include "IValue.hpp"
 
 namespace nosqldb {
 
-class IntValue : public IValue {
+class BoolValue : public IValue {
 private:
-    int data;
+    bool data;
 
 public:
     // Constructor initializing the data
-    explicit IntValue(int val) : data(val) {}
+    explicit BoolValue(bool val) : data(val) {}
 
     // Override to return formatted display string
     std::string toDisplayString() const override {
-        return std::to_string(data);
+        return data ? "true" : "false";
     }
 
     // Override the getType method
     ValueType getType() const override {
-        return ValueType::INT;
+        return ValueType::BOOL;
     }
 
     // Helper function to get the raw value if needed later
-    int getValue() const { return data; }
+    bool getValue() const { return data; }
 
-    // Convert the integer to string for serialization
+    // Convert the bool to string for serialization (compact: "1" or "0")
     std::string getAsString() const override {
-        return std::to_string(data);
+        return data ? "1" : "0";
     }
 };
 

@@ -8,6 +8,8 @@
 
 #include "Database.hpp"
 
+using namespace nosqldb;
+
 // Helpers
 static const std::string TEST_FILE = "test_dump.db";
 
@@ -408,54 +410,422 @@ void test_clear_timer_cancel_on_destroy() {
     cleanupTestFile();
 }
 
+void test_clear_timer_rejects_negative() {
+    Database db;
+    // Negative seconds should be rejected, returning false
+    assert(!db.setClearTimer(-5, TEST_FILE));
+    // Database should be untouched
+    db.setInt("safe", 1);
+    assert(db.count() == 1);
+    std::cout << "  PASS: test_clear_timer_rejects_negative\n";
+}
+
+void test_clear_timer_rejects_zero() {
+    Database db;
+    // Zero seconds should also be rejected
+    assert(!db.setClearTimer(0, TEST_FILE));
+    db.setInt("safe", 1);
+    assert(db.count() == 1);
+    std::cout << "  PASS: test_clear_timer_rejects_zero\n";
+}
+
+// ---- Load Replaces Store Tests ----
+
+void test_load_clears_existing_data() {
+    cleanupTestFile();
+    // Save a file with one key
+    {
+        Database db;
+        db.setInt("from_file", 42);
+        assert(db.saveToFile(TEST_FILE));
+    }
+    // Load into a database that already has different data
+    {
+        Database db;
+        db.setString("pre_existing", "should be gone");
+        db.setInt("another", 99);
+        assert(db.count() == 2);
+
+        auto result = db.loadFromFile(TEST_FILE);
+        assert(result.fileFound);
+        assert(result.entriesLoaded == 1);
+
+        // Pre-existing keys must be gone — load replaces, not merges
+        assert(!db.exists("pre_existing"));
+        assert(!db.exists("another"));
+        assert(db.count() == 1);
+        auto val = db.get("from_file");
+        assert(val.has_value() && *val == "42");
+    }
+    cleanupTestFile();
+    std::cout << "  PASS: test_load_clears_existing_data\n";
+}
+
+// ---- emptyDatabaseFile Return Value Test ----
+
+void test_empty_database_file_returns_bool() {
+    cleanupTestFile();
+    Database db;
+    db.setInt("a", 1);
+    // Should return true on success
+    assert(db.emptyDatabaseFile(TEST_FILE));
+    assert(db.count() == 0);
+    cleanupTestFile();
+    std::cout << "  PASS: test_empty_database_file_returns_bool\n";
+}
+
+// ---- Double Tests ----
+
+void test_set_and_get_double() {
+    Database db;
+    assert(db.setDouble("pi", 3.14));
+    auto val = db.get("pi");
+    assert(val.has_value());
+    assert(*val == "3.14");
+    std::cout << "  PASS: test_set_and_get_double\n";
+}
+
+void test_double_precision() {
+    cleanupTestFile();
+    {
+        Database db;
+        db.setDouble("big", 123456789.123456);
+        assert(db.saveToFile(TEST_FILE));
+    }
+    {
+        Database db;
+        auto result = db.loadFromFile(TEST_FILE);
+        assert(result.fileFound);
+        assert(result.entriesLoaded == 1);
+        auto val = db.get("big");
+        assert(val.has_value());
+        // Verify the value survives a round-trip
+    }
+    cleanupTestFile();
+    std::cout << "  PASS: test_double_precision\n";
+}
+
+void test_type_double() {
+    Database db;
+    db.setDouble("pi", 3.14);
+    auto t = db.type("pi");
+    assert(t.has_value());
+    assert(*t == ValueType::DOUBLE);
+    std::cout << "  PASS: test_type_double\n";
+}
+
+void test_persistence_double() {
+    cleanupTestFile();
+    {
+        Database db;
+        db.setDouble("e", 2.71828);
+        assert(db.saveToFile(TEST_FILE));
+    }
+    {
+        Database db;
+        auto result = db.loadFromFile(TEST_FILE);
+        assert(result.fileFound);
+        assert(result.entriesLoaded == 1);
+        auto val = db.get("e");
+        assert(val.has_value());
+        assert(*val == "2.71828");
+        auto t = db.type("e");
+        assert(t.has_value() && *t == ValueType::DOUBLE);
+    }
+    cleanupTestFile();
+    std::cout << "  PASS: test_persistence_double\n";
+}
+
+// ---- Bool Tests ----
+
+void test_set_and_get_bool_true() {
+    Database db;
+    assert(db.setBool("flag", true));
+    auto val = db.get("flag");
+    assert(val.has_value());
+    assert(*val == "true");
+    std::cout << "  PASS: test_set_and_get_bool_true\n";
+}
+
+void test_set_and_get_bool_false() {
+    Database db;
+    assert(db.setBool("flag", false));
+    auto val = db.get("flag");
+    assert(val.has_value());
+    assert(*val == "false");
+    std::cout << "  PASS: test_set_and_get_bool_false\n";
+}
+
+void test_type_bool() {
+    Database db;
+    db.setBool("flag", true);
+    auto t = db.type("flag");
+    assert(t.has_value());
+    assert(*t == ValueType::BOOL);
+    std::cout << "  PASS: test_type_bool\n";
+}
+
+void test_persistence_bool() {
+    cleanupTestFile();
+    {
+        Database db;
+        db.setBool("on", true);
+        db.setBool("off", false);
+        assert(db.saveToFile(TEST_FILE));
+    }
+    {
+        Database db;
+        auto result = db.loadFromFile(TEST_FILE);
+        assert(result.fileFound);
+        assert(result.entriesLoaded == 2);
+        auto v1 = db.get("on");
+        assert(v1.has_value() && *v1 == "true");
+        auto v2 = db.get("off");
+        assert(v2.has_value() && *v2 == "false");
+        auto t1 = db.type("on");
+        assert(t1.has_value() && *t1 == ValueType::BOOL);
+        auto t2 = db.type("off");
+        assert(t2.has_value() && *t2 == ValueType::BOOL);
+    }
+    cleanupTestFile();
+    std::cout << "  PASS: test_persistence_bool\n";
+}
+
+// ---- List Tests ----
+
+void test_lpush_creates_list() {
+    Database db;
+    int result = db.listPushLeft("mylist", "a");
+    assert(result == 1);
+    std::cout << "  PASS: test_lpush_creates_list\n";
+}
+
+void test_lpush_prepends() {
+    Database db;
+    db.listPushLeft("mylist", "a");
+    db.listPushLeft("mylist", "b");
+    db.listPushLeft("mylist", "c");
+    auto range = db.listRange("mylist", 0, -1);
+    assert(range.has_value());
+    assert(range->size() == 3);
+    assert((*range)[0] == "c");
+    assert((*range)[1] == "b");
+    assert((*range)[2] == "a");
+    std::cout << "  PASS: test_lpush_prepends\n";
+}
+
+void test_rpush_appends() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    db.listPushRight("mylist", "b");
+    db.listPushRight("mylist", "c");
+    auto range = db.listRange("mylist", 0, -1);
+    assert(range.has_value());
+    assert(range->size() == 3);
+    assert((*range)[0] == "a");
+    assert((*range)[1] == "b");
+    assert((*range)[2] == "c");
+    std::cout << "  PASS: test_rpush_appends\n";
+}
+
+void test_lpop_returns_front() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    db.listPushRight("mylist", "b");
+    db.listPushRight("mylist", "c");
+    auto val = db.listPopLeft("mylist");
+    assert(val.has_value());
+    assert(*val == "a");
+    std::cout << "  PASS: test_lpop_returns_front\n";
+}
+
+void test_rpop_returns_back() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    db.listPushRight("mylist", "b");
+    db.listPushRight("mylist", "c");
+    auto val = db.listPopRight("mylist");
+    assert(val.has_value());
+    assert(*val == "c");
+    std::cout << "  PASS: test_rpop_returns_back\n";
+}
+
+void test_pop_empty_list() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    db.listPopLeft("mylist");  // remove the only element
+    auto val = db.listPopLeft("mylist");
+    assert(!val.has_value());
+    std::cout << "  PASS: test_pop_empty_list\n";
+}
+
+void test_lrange_basic() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    db.listPushRight("mylist", "b");
+    db.listPushRight("mylist", "c");
+    db.listPushRight("mylist", "d");
+    db.listPushRight("mylist", "e");
+    auto range = db.listRange("mylist", 0, -1);
+    assert(range.has_value());
+    assert(range->size() == 5);
+    assert((*range)[0] == "a");
+    assert((*range)[4] == "e");
+    std::cout << "  PASS: test_lrange_basic\n";
+}
+
+void test_lrange_subset() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    db.listPushRight("mylist", "b");
+    db.listPushRight("mylist", "c");
+    db.listPushRight("mylist", "d");
+    auto range = db.listRange("mylist", 1, 2);
+    assert(range.has_value());
+    assert(range->size() == 2);
+    assert((*range)[0] == "b");
+    assert((*range)[1] == "c");
+    std::cout << "  PASS: test_lrange_subset\n";
+}
+
+void test_llen() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    db.listPushRight("mylist", "b");
+    db.listPushRight("mylist", "c");
+    auto len = db.listLength("mylist");
+    assert(len.has_value());
+    assert(*len == 3);
+    db.listPopLeft("mylist");
+    len = db.listLength("mylist");
+    assert(len.has_value());
+    assert(*len == 2);
+    std::cout << "  PASS: test_llen\n";
+}
+
+void test_list_wrong_type() {
+    Database db;
+    db.setInt("num", 42);
+    int result = db.listPushLeft("num", "val");
+    assert(result == -1);
+    std::cout << "  PASS: test_list_wrong_type\n";
+}
+
+void test_type_list() {
+    Database db;
+    db.listPushRight("mylist", "a");
+    auto t = db.type("mylist");
+    assert(t.has_value());
+    assert(*t == ValueType::LIST);
+    std::cout << "  PASS: test_type_list\n";
+}
+
+void test_persistence_list() {
+    cleanupTestFile();
+    {
+        Database db;
+        db.listPushRight("mylist", "hello");
+        db.listPushRight("mylist", "world,with,commas");
+        db.listPushRight("mylist", "back\\slash");
+        assert(db.saveToFile(TEST_FILE));
+    }
+    {
+        Database db;
+        auto result = db.loadFromFile(TEST_FILE);
+        assert(result.fileFound);
+        assert(result.entriesLoaded == 1);
+        auto range = db.listRange("mylist", 0, -1);
+        assert(range.has_value());
+        assert(range->size() == 3);
+        assert((*range)[0] == "hello");
+        assert((*range)[1] == "world,with,commas");
+        assert((*range)[2] == "back\\slash");
+        auto t = db.type("mylist");
+        assert(t.has_value() && *t == ValueType::LIST);
+    }
+    cleanupTestFile();
+    std::cout << "  PASS: test_persistence_list\n";
+}
+
 // ---- Main ----
 
 int main() {
+    int testCount = 0;
     std::cout << "Running tests...\n\n";
     std::cout << "[CRUD Operations]\n";
-    test_set_and_get_int();
-    test_set_and_get_string();
-    test_get_missing_key();
-    test_overwrite_value();
-    test_overwrite_type_change();
-    test_delete();
-    test_delete_missing();
-    test_delete_multiple();
-    test_exists();
-    test_count();
-    test_keys();
+    test_set_and_get_int();         ++testCount;
+    test_set_and_get_string();      ++testCount;
+    test_get_missing_key();         ++testCount;
+    test_overwrite_value();         ++testCount;
+    test_overwrite_type_change();   ++testCount;
+    test_delete();                  ++testCount;
+    test_delete_missing();          ++testCount;
+    test_delete_multiple();         ++testCount;
+    test_exists();                  ++testCount;
+    test_count();                   ++testCount;
+    test_keys();                    ++testCount;
 
     std::cout << "\n[Validation]\n";
-    test_reject_empty_key();
+    test_reject_empty_key();        ++testCount;
 
     std::cout << "\n[Rename]\n";
-    test_rename_basic();
-    test_rename_overwrites_target();
-    test_rename_missing_source();
-    test_rename_same_key();
-    test_rename_empty_keys();
+    test_rename_basic();            ++testCount;
+    test_rename_overwrites_target(); ++testCount;
+    test_rename_missing_source();   ++testCount;
+    test_rename_same_key();         ++testCount;
+    test_rename_empty_keys();       ++testCount;
 
     std::cout << "\n[Type]\n";
-    test_type_int();
-    test_type_string();
-    test_type_missing();
+    test_type_int();                ++testCount;
+    test_type_string();             ++testCount;
+    test_type_missing();            ++testCount;
 
     std::cout << "\n[Persistence]\n";
-    test_save_and_load_basic();
-    test_roundtrip_string_with_spaces();
-    test_roundtrip_string_with_tabs_and_newlines();
-    test_roundtrip_string_with_backslash();
-    test_load_missing_file();
-    test_load_malformed_lines();
-    test_empty_database_file();
+    test_save_and_load_basic();     ++testCount;
+    test_roundtrip_string_with_spaces();          ++testCount;
+    test_roundtrip_string_with_tabs_and_newlines(); ++testCount;
+    test_roundtrip_string_with_backslash();        ++testCount;
+    test_load_missing_file();       ++testCount;
+    test_load_malformed_lines();    ++testCount;
+    test_empty_database_file();     ++testCount;
+    test_load_clears_existing_data(); ++testCount;
+    test_empty_database_file_returns_bool(); ++testCount;
 
     std::cout << "\n[Enum Serialization]\n";
-    test_value_type_to_string();
+    test_value_type_to_string();    ++testCount;
 
     std::cout << "\n[Timer]\n";
-    test_clear_timer_fires();
-    test_clear_timer_cancel_on_destroy();
+    test_clear_timer_fires();       ++testCount;
+    test_clear_timer_cancel_on_destroy();          ++testCount;
+    test_clear_timer_rejects_negative();           ++testCount;
+    test_clear_timer_rejects_zero();               ++testCount;
 
-    std::cout << "\n--- All " << 29 << " tests passed! ---\n";
+    std::cout << "\n[Double]\n";
+    test_set_and_get_double();      ++testCount;
+    test_double_precision();        ++testCount;
+    test_type_double();             ++testCount;
+    test_persistence_double();      ++testCount;
+
+    std::cout << "\n[Bool]\n";
+    test_set_and_get_bool_true();   ++testCount;
+    test_set_and_get_bool_false();  ++testCount;
+    test_type_bool();               ++testCount;
+    test_persistence_bool();        ++testCount;
+
+    std::cout << "\n[List]\n";
+    test_lpush_creates_list();      ++testCount;
+    test_lpush_prepends();          ++testCount;
+    test_rpush_appends();           ++testCount;
+    test_lpop_returns_front();      ++testCount;
+    test_rpop_returns_back();       ++testCount;
+    test_pop_empty_list();          ++testCount;
+    test_lrange_basic();            ++testCount;
+    test_lrange_subset();           ++testCount;
+    test_llen();                    ++testCount;
+    test_list_wrong_type();         ++testCount;
+    test_type_list();               ++testCount;
+    test_persistence_list();        ++testCount;
+
+    std::cout << "\n--- All " << testCount << " tests passed! ---\n";
     return 0;
 }
